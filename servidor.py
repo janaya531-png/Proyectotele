@@ -29,6 +29,9 @@ if cred:
     except Exception as e:
         print(f"❌ Error en initialize_app: {e}")
 
+# ── Constantes ────────────────────────────────────────────
+OWNER_EMAIL = 'janaya531@unab.edu.co'  # ← Solo el owner tiene permisos totales
+
 # ── Flask ─────────────────────────────────────────────────
 app = Flask(__name__)
 CORS(app)
@@ -65,7 +68,17 @@ def listar_usuarios():
 def crear_usuario():
     if not cred:
         return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
+    
     data = request.json
+    email_admin = data.get('email_admin')  # Email de quién está creando
+    
+    # ✅ PROTECCIÓN: Solo owner puede crear admins
+    if data.get('rol') == 'admin' and email_admin != OWNER_EMAIL:
+        return jsonify({
+            'ok': False,
+            'error': '❌ Solo el owner puede crear admins'
+        }), 403
+    
     try:
         u = auth.create_user(
             email=data['email'],
@@ -85,15 +98,34 @@ def crear_usuario():
 def actualizar_usuario(uid):
     if not cred:
         return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
+    
     data = request.json
+    email_admin = data.get('email_admin')  # Email de quién está actualizando
+    
     try:
+        # Obtener el usuario actual
+        usuario = auth.get_user(uid)
+        rol_actual = (usuario.custom_claims or {}).get('rol', 'operador')
+        
+        # ✅ PROTECCIÓN: Si intenta cambiar rol, solo el owner puede
+        if 'rol' in data and data['rol'] != rol_actual:
+            if email_admin != OWNER_EMAIL:
+                return jsonify({
+                    'ok': False,
+                    'error': '❌ Solo el owner puede cambiar roles'
+                }), 403
+        
+        # Actualizar nombre
         auth.update_user(uid, display_name=data.get('nombre', ''))
+        
+        # Cambiar rol si se especifica
         if 'rol' in data:
             rol = data['rol']
             claims = {'rol': rol}
             if rol == 'admin':
                 claims['admin'] = True
             auth.set_custom_user_claims(uid, claims)
+        
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
@@ -103,21 +135,24 @@ def eliminar_usuario(uid):
     if not cred:
         return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
     
+    data = request.json or {}
+    email_admin = data.get('email_admin')  # Email de quién intenta eliminar
+    
+    # ✅ PROTECCIÓN 1: Solo owner puede eliminar
+    if email_admin != OWNER_EMAIL:
+        return jsonify({
+            'ok': False,
+            'error': '❌ Solo el owner puede eliminar usuarios'
+        }), 403
+    
     try:
-        # Obtener el usuario a eliminar
+        # ✅ PROTECCIÓN 2: Owner no puede eliminarse a sí mismo
         usuario = auth.get_user(uid)
-        rol_usuario = (usuario.custom_claims or {}).get('rol', 'operador')
-        
-        # ✅ PROTECCIÓN 1: No permitir eliminar admins
-        if rol_usuario == 'admin':
+        if usuario.email == OWNER_EMAIL:
             return jsonify({
                 'ok': False,
-                'error': '❌ No se puede eliminar un admin. Primero cambia su rol a operador.'
+                'error': '❌ No puedes eliminarte a ti mismo'
             }), 403
-        
-        # ✅ PROTECCIÓN 2: No permitir auto-eliminación
-        # (En producción, deberías verificar quién hace la petición, pero por seguridad
-        #  también lo bloqueamos aquí)
         
         auth.delete_user(uid)
         return jsonify({'ok': True})
