@@ -131,6 +131,13 @@ def crear_usuario():
     if not is_admin_or_owner(email_admin):
         return jsonify({"ok": False, "error": "❌ No autorizado"}), 403
 
+    # 🔒 Solo owner puede crear admins
+    if rol == "admin" and not is_owner(email_admin):
+        return jsonify({
+            "ok": False,
+            "error": "❌ Solo el owner puede crear admins"
+        }), 403
+
     if not email or not password:
         return jsonify({"ok": False, "error": "Email y password son obligatorios"}), 400
 
@@ -178,6 +185,13 @@ def actualizar_usuario(uid):
         claims_actuales = usuario.custom_claims or {}
         rol_actual = claims_actuales.get("rol", "operador")
 
+        # 🔒 Admins NO pueden editar otros admins
+        if rol_actual == "admin" and not is_owner(email_admin):
+            return jsonify({
+                "ok": False,
+                "error": "❌ No puedes editar a otro admin"
+            }), 403
+
         # actualizar nombre si viene
         if "nombre" in data:
             auth.update_user(uid, display_name=data.get("nombre", ""))
@@ -189,11 +203,11 @@ def actualizar_usuario(uid):
             if rol_nuevo not in ["admin", "operador", "viewer"]:
                 rol_nuevo = "operador"
 
-            # 🔒 Si el usuario es admin, solo owner puede modificar su rol
-            if rol_actual == "admin" and not is_owner(email_admin):
+            # 🔒 Solo owner puede crear/cambiar a admin
+            if rol_nuevo == "admin" and not is_owner(email_admin):
                 return jsonify({
                     "ok": False,
-                    "error": "❌ Solo el owner puede modificar el rol de un admin"
+                    "error": "❌ Solo el owner puede cambiar a rol admin"
                 }), 403
 
             # Aplicar nuevo rol
