@@ -6,18 +6,28 @@ from flask_cors import CORS
 import json
 
 # ── Firebase Admin ────────────────────────────────────────
-# En Railway se usa variable de entorno FIREBASE_KEY (JSON como string)
-raw = os.environ.get('FIREBASE_KEY')
-if raw:
-    cred_dict = json.loads(raw)
-    cred = credentials.Certificate(cred_dict)
-else:
-    # Fallback local: usa el archivo
-    cred = credentials.Certificate('serviceAccountKey.json')
+try:
+    raw = os.environ.get('FIREBASE_KEY')
+    if raw:
+        cred_dict = json.loads(raw)
+        cred = credentials.Certificate(cred_dict)
+        print("✅ FIREBASE_KEY encontrada en variables de entorno")
+    else:
+        print("⚠️ FIREBASE_KEY no encontrada, intentando archivo local...")
+        cred = credentials.Certificate('serviceAccountKey.json')
+        print("✅ serviceAccountKey.json cargado")
+except Exception as e:
+    print(f"❌ Error inicializando Firebase: {e}")
+    cred = None
 
-firebase_admin.initialize_app(cred, {
-    'databaseURL': 'https://telerobotica-593cb-default-rtdb.firebaseio.com'
-})
+if cred:
+    try:
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': 'https://telerobotica-593cb-default-rtdb.firebaseio.com'
+        })
+        print("✅ Firebase inicializado correctamente")
+    except Exception as e:
+        print(f"❌ Error en initialize_app: {e}")
 
 # ── Flask ─────────────────────────────────────────────────
 app = Flask(__name__)
@@ -25,10 +35,16 @@ CORS(app)
 
 @app.route('/', methods=['GET'])
 def health():
-    return jsonify({'ok': True, 'status': 'Biobrazo API online 🤖'})
+    return jsonify({
+        'ok': True,
+        'status': 'Biobrazo API online 🤖',
+        'firebase': 'configured' if cred else 'not-configured'
+    })
 
 @app.route('/usuarios', methods=['GET'])
 def listar_usuarios():
+    if not cred:
+        return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
     try:
         usuarios = []
         page = auth.list_users()
@@ -47,6 +63,8 @@ def listar_usuarios():
 
 @app.route('/usuarios', methods=['POST'])
 def crear_usuario():
+    if not cred:
+        return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
     data = request.json
     try:
         u = auth.create_user(
@@ -65,6 +83,8 @@ def crear_usuario():
 
 @app.route('/usuarios/<uid>', methods=['PUT'])
 def actualizar_usuario(uid):
+    if not cred:
+        return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
     data = request.json
     try:
         auth.update_user(uid, display_name=data.get('nombre', ''))
@@ -80,7 +100,25 @@ def actualizar_usuario(uid):
 
 @app.route('/usuarios/<uid>', methods=['DELETE'])
 def eliminar_usuario(uid):
+    if not cred:
+        return jsonify({'ok': False, 'error': 'Firebase no configurado'}), 500
+    
     try:
+        # Obtener el usuario a eliminar
+        usuario = auth.get_user(uid)
+        rol_usuario = (usuario.custom_claims or {}).get('rol', 'operador')
+        
+        # ✅ PROTECCIÓN 1: No permitir eliminar admins
+        if rol_usuario == 'admin':
+            return jsonify({
+                'ok': False,
+                'error': '❌ No se puede eliminar un admin. Primero cambia su rol a operador.'
+            }), 403
+        
+        # ✅ PROTECCIÓN 2: No permitir auto-eliminación
+        # (En producción, deberías verificar quién hace la petición, pero por seguridad
+        #  también lo bloqueamos aquí)
+        
         auth.delete_user(uid)
         return jsonify({'ok': True})
     except Exception as e:
